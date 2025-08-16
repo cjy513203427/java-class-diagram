@@ -320,6 +320,28 @@ export class JavaLanguageServerClient {
                 document.uri
             );
 
+            // Check if documentSymbols is valid and iterable
+            if (!documentSymbols || !Array.isArray(documentSymbols)) {
+                console.warn(`No document symbols found for ${className}, falling back to text parsing`);
+                const inheritanceInfo = this.extractInheritanceFromText(document, className);
+                return {
+                    className: className,
+                    packageName: this.extractPackageName(document),
+                    superClass: inheritanceInfo.superClass,
+                    interfaces: inheritanceInfo.interfaces,
+                    fields: [],
+                    methods: [],
+                    constructors: [],
+                    isAbstract: inheritanceInfo.isAbstract,
+                    isInterface: document.getText().includes(`interface ${className}`),
+                    isEnum: document.getText().includes(`enum ${className}`),
+                    location: {
+                        uri: classSymbol.location.uri.toString(),
+                        range: classSymbol.location.range
+                    }
+                };
+            }
+
             return this.parseDocumentSymbols(documentSymbols, className, document);
         } catch (error) {
             console.error('Error using VSCode API for class info:', error);
@@ -445,7 +467,8 @@ export class JavaLanguageServerClient {
         const constructors: MethodInfo[] = [];
 
         // Parse class members
-        for (const child of classSymbol.children) {
+        if (classSymbol.children && Array.isArray(classSymbol.children)) {
+            for (const child of classSymbol.children) {
             switch (child.kind) {
                 case vscode.SymbolKind.Field:
                 case vscode.SymbolKind.Property:
@@ -486,6 +509,7 @@ export class JavaLanguageServerClient {
                     break;
             }
         }
+        }
 
         // Extract inheritance information from the document text
         const inheritanceInfo = this.extractInheritanceFromText(document, className);
@@ -513,18 +537,25 @@ export class JavaLanguageServerClient {
     }
 
     private findClassSymbol(symbols: vscode.DocumentSymbol[], className: string): vscode.DocumentSymbol | null {
+        // Check if symbols is valid and iterable
+        if (!symbols || !Array.isArray(symbols)) {
+            return null;
+        }
+
         for (const symbol of symbols) {
-            if ((symbol.kind === vscode.SymbolKind.Class || 
-                 symbol.kind === vscode.SymbolKind.Interface || 
-                 symbol.kind === vscode.SymbolKind.Enum) && 
+            if ((symbol.kind === vscode.SymbolKind.Class ||
+                 symbol.kind === vscode.SymbolKind.Interface ||
+                 symbol.kind === vscode.SymbolKind.Enum) &&
                 symbol.name === className) {
                 return symbol;
             }
-            
+
             // Search in children recursively
-            const found = this.findClassSymbol(symbol.children, className);
-            if (found) {
-                return found;
+            if (symbol.children && Array.isArray(symbol.children)) {
+                const found = this.findClassSymbol(symbol.children, className);
+                if (found) {
+                    return found;
+                }
             }
         }
         return null;
