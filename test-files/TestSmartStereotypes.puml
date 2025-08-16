@@ -1,0 +1,133 @@
+@startuml
+!theme plain
+skinparam classAttributeIconSize 0
+skinparam classFontSize 12
+skinparam packageFontSize 14
+skinparam backgroundColor #FFFFFF
+
+' Enhanced styling similar to intersystems-objectscript-class-diagram-view
+skinparam class {
+    BackgroundColor #F8F9FA
+    BorderColor #2E86AB
+    FontColor #212529
+    BorderThickness 2
+    FontStyle bold
+}
+
+skinparam interface {
+    BackgroundColor #E3F2FD
+    BorderColor #1976D2
+    FontColor #0D47A1
+    BorderThickness 2
+}
+
+skinparam enum {
+    BackgroundColor #FFF3E0
+    BorderColor #F57C00
+    FontColor #E65100
+    BorderThickness 2
+}
+
+skinparam abstract {
+    BackgroundColor #F3E5F5
+    BorderColor #7B1FA2
+    FontColor #4A148C
+    BorderThickness 2
+}
+
+' Stereotype styles
+skinparam class<<System>> {
+    BackgroundColor #FFEBEE
+    BorderColor #D32F2F
+    FontColor #B71C1C
+    BorderThickness 1
+    FontStyle italic
+}
+
+skinparam class<<Clickable>> {
+    BackgroundColor #E8F5E8
+    BorderColor #4CAF50
+    FontColor #2E7D32
+    BorderThickness 2
+}
+
+skinparam class<<Main>> {
+    BackgroundColor #FFF9C4
+    BorderColor #F57F17
+    FontColor #E65100
+    BorderThickness 3
+    FontStyle bold
+}
+
+' Support for combined stereotypes
+skinparam interface<<clickable>> {
+    BackgroundColor #E8F5E8
+    BorderColor #4CAF50
+    FontColor #2E7D32
+    BorderThickness 2
+}
+
+skinparam interface<<main>> {
+    BackgroundColor #FFF9C4
+    BorderColor #F57F17
+    FontColor #E65100
+    BorderThickness 3
+    FontStyle bold
+}
+
+skinparam arrow {
+    Color #424242
+    Thickness 2
+}
+
+left to right direction
+scale max 1200 width
+
+package "com.webtutsplus.ecommerce.repository" {
+    interface CartRepository <<Clickable>> {
+      ~findAllByUserOrderByCreatedDateDesc(user: User) : List
+      ~deleteByUser(user: User) : List
+    }
+
+    interface Categoryrepository <<Clickable>> {
+      ~findByCategoryName(categoryName: String) : Category
+    }
+
+    interface OrderItemsRepository <<Clickable>> {
+    }
+
+    interface OrderRepository <<Clickable>> {
+      ~findAllByUserOrderByCreatedDateDesc(user: User) : List
+    }
+
+    interface ProductRepository <<Clickable>> {
+    }
+
+    interface TokenRepository <<Clickable>> {
+      ~findTokenByUser(user: User) : AuthenticationToken
+      ~findTokenByToken(token: String) : AuthenticationToken
+    }
+
+    interface UserRepository <<Main>> {
+      ~findAll() : List
+      ~findByEmail(email: String) : User
+      ~findUserByEmail(email: String) : User
+    }
+
+    interface WishListRepository <<Clickable>> {
+      ~findAllByUserIdOrderByCreatedDateDesc(userId: Integer) : List
+    }
+}
+
+class JpaRepository <<System>>
+
+JpaRepository <|-- CartRepository
+JpaRepository <|-- Categoryrepository
+JpaRepository <|-- OrderItemsRepository
+JpaRepository <|-- OrderRepository
+JpaRepository <|-- ProductRepository
+JpaRepository <|-- TokenRepository
+JpaRepository <|-- UserRepository
+JpaRepository <|-- WishListRepository
+
+@enduml

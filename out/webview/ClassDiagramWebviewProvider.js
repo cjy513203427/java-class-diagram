@@ -265,11 +265,13 @@ class ClassDiagramWebviewProvider {
                 // Encode PlantUML code
                 const encoded = plantumlEncoder.encode(plantUMLCode);
                 const diagramUrl = \`http://www.plantuml.com/plantuml/svg/\${encoded}\`;
-                
+
                 // Create SVG element
                 const img = document.createElement('img');
                 img.id = 'diagram-svg';
                 img.src = diagramUrl;
+                img.style.userSelect = 'none';
+                img.style.cursor = 'pointer';
                 img.alt = 'Class Diagram';
                 
                 img.onload = function() {
@@ -293,16 +295,34 @@ class ClassDiagramWebviewProvider {
         }
         
         function addClickHandlers() {
-            // This is a placeholder for adding click handlers to class elements
-            // In a real implementation, we would parse the SVG and add click handlers
-            // to class names and method names
-            const svg = document.getElementById('diagram-svg');
-            if (svg) {
-                svg.addEventListener('click', function(event) {
-                    // Handle clicks on diagram elements
-                    console.log('Diagram clicked', event);
-                });
-            }
+            const img = document.getElementById('diagram-svg');
+            if (!img) return;
+
+            img.addEventListener('click', async (e) => {
+                try {
+                    // 点击后从 img.src 反向 decode 出 PlantUML 文本，再解析 [[openfile:...#ClassName]] 链接
+                    const src = img.src || '';
+                    const lastSlash = src.lastIndexOf('/');
+                    const encoded = lastSlash >= 0 ? src.substring(lastSlash + 1) : '';
+                    if (!encoded) return;
+
+                    // 解析出所有 openfile 链接，选择距离点击位置最近的一个（简化：先取第一个）
+                    const uml = plantumlEncoder.decode(encoded);
+                    const linkRegex = /\[\[openfile:([^#\]]+)#([^\]]+)\]\]/g;
+                    const links = [];
+                    let match;
+                    while ((match = linkRegex.exec(uml)) !== null) {
+                        links.push({ path: decodeURIComponent(match[1]), className: decodeURIComponent(match[2]) });
+                    }
+                    if (links.length === 0) return;
+
+                    // 简化处理：直接使用第一条链接（后续可改为基于鼠标坐标选择最近元素）
+                    const target = links[0];
+                    navigateToClass(target.className, target.path);
+                } catch (err) {
+                    console.error('Failed to handle click for navigation:', err);
+                }
+            });
         }
         
         function toggleCode() {
@@ -471,7 +491,7 @@ class ClassDiagramWebviewProvider {
             vscode.window.showErrorMessage(`Could not navigate to class ${className}. File may not exist or be accessible.`);
         }
     }
-    async navigateToMethod(className, methodName, filePath) {
+    async navigateToMethod(_className, methodName, filePath) {
         try {
             const document = await vscode.workspace.openTextDocument(filePath);
             const editor = await vscode.window.showTextDocument(document);

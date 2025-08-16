@@ -322,24 +322,8 @@ export class JavaLanguageServerClient {
 
             // Check if documentSymbols is valid and iterable
             if (!documentSymbols || !Array.isArray(documentSymbols)) {
-                console.warn(`No document symbols found for ${className}, falling back to text parsing`);
-                const inheritanceInfo = this.extractInheritanceFromText(document, className);
-                return {
-                    className: className,
-                    packageName: this.extractPackageName(document),
-                    superClass: inheritanceInfo.superClass,
-                    interfaces: inheritanceInfo.interfaces,
-                    fields: [],
-                    methods: [],
-                    constructors: [],
-                    isAbstract: inheritanceInfo.isAbstract,
-                    isInterface: document.getText().includes(`interface ${className}`),
-                    isEnum: document.getText().includes(`enum ${className}`),
-                    location: {
-                        uri: classSymbol.location.uri.toString(),
-                        range: classSymbol.location.range
-                    }
-                };
+                console.warn(`No document symbols found for ${className}, falling back to system class info`);
+                return await this.getSystemClassInfo(className);
             }
 
             return this.parseDocumentSymbols(documentSymbols, className, document);
@@ -578,6 +562,140 @@ export class JavaLanguageServerClient {
         } catch (error) {
             console.error('Error getting type definition:', error);
             return [];
+        }
+    }
+
+    /**
+     * 通过Language Server精确定位类的位置
+     */
+    async findClassLocation(className: string): Promise<vscode.Location | null> {
+        try {
+            // 首先尝试在工作区中搜索类符号
+            const symbols = await vscode.commands.executeCommand<vscode.SymbolInformation[]>(
+                'vscode.executeWorkspaceSymbolProvider',
+                className
+            );
+
+            if (symbols && symbols.length > 0) {
+                // 查找精确匹配的类符号
+                const exactMatch = symbols.find(symbol =>
+                    (symbol.kind === vscode.SymbolKind.Class ||
+                     symbol.kind === vscode.SymbolKind.Interface ||
+                     symbol.kind === vscode.SymbolKind.Enum) &&
+                    symbol.name === className
+                );
+
+                if (exactMatch) {
+                    return exactMatch.location;
+                }
+
+                // 如果没有精确匹配，查找包含该类名的符号
+                const partialMatch = symbols.find(symbol =>
+                    (symbol.kind === vscode.SymbolKind.Class ||
+                     symbol.kind === vscode.SymbolKind.Interface ||
+                     symbol.kind === vscode.SymbolKind.Enum) &&
+                    (symbol.name.endsWith(className) || symbol.name.includes(className))
+                );
+
+                if (partialMatch) {
+                    return partialMatch.location;
+                }
+            }
+
+            return null;
+        } catch (error) {
+            console.error('Error finding class location:', error);
+            return null;
+        }
+    }
+
+    /**
+     * 通过Language Server精确定位方法的位置
+     */
+    async findMethodLocation(className: string, methodName: string): Promise<vscode.Location | null> {
+        try {
+            // 首先找到类的位置
+            const classLocation = await this.findClassLocation(className);
+            if (!classLocation) {
+                return null;
+            }
+
+            // 打开类文件并获取文档符号
+            const document = await vscode.workspace.openTextDocument(classLocation.uri);
+            const documentSymbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
+                'vscode.executeDocumentSymbolProvider',
+                document.uri
+            );
+
+            if (!documentSymbols || !Array.isArray(documentSymbols)) {
+                return null;
+            }
+
+            // 查找类符号
+            const classSymbol = this.findClassSymbol(documentSymbols, className);
+            if (!classSymbol || !classSymbol.children) {
+                return null;
+            }
+
+            // 在类的子符号中查找方法
+            const methodSymbol = classSymbol.children.find(child =>
+                child.kind === vscode.SymbolKind.Method &&
+                child.name === methodName
+            );
+
+            if (methodSymbol) {
+                return new vscode.Location(document.uri, methodSymbol.selectionRange);
+            }
+
+            return null;
+        } catch (error) {
+            console.error('Error finding method location:', error);
+            return null;
+        }
+    }
+
+    /**
+     * 通过Language Server精确定位字段的位置
+     */
+    async findFieldLocation(className: string, fieldName: string): Promise<vscode.Location | null> {
+        try {
+            // 首先找到类的位置
+            const classLocation = await this.findClassLocation(className);
+            if (!classLocation) {
+                return null;
+            }
+
+            // 打开类文件并获取文档符号
+            const document = await vscode.workspace.openTextDocument(classLocation.uri);
+            const documentSymbols = await vscode.commands.executeCommand<vscode.DocumentSymbol[]>(
+                'vscode.executeDocumentSymbolProvider',
+                document.uri
+            );
+
+            if (!documentSymbols || !Array.isArray(documentSymbols)) {
+                return null;
+            }
+
+            // 查找类符号
+            const classSymbol = this.findClassSymbol(documentSymbols, className);
+            if (!classSymbol || !classSymbol.children) {
+                return null;
+            }
+
+            // 在类的子符号中查找字段
+            const fieldSymbol = classSymbol.children.find(child =>
+                (child.kind === vscode.SymbolKind.Field || child.kind === vscode.SymbolKind.Property) &&
+                child.name === fieldName
+            );
+
+            if (fieldSymbol) {
+                return new vscode.Location(document.uri, fieldSymbol.selectionRange);
+            }
+
+            return null;
+        } catch (error) {
+            console.error('Error finding field location:', error);
+            return null;
         }
     }
 

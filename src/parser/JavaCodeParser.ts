@@ -78,7 +78,8 @@ export class JavaCodeParser {
         try {
             classStructure = await this.parseWithLanguageServer(javaCode, filePath);
         } catch (error) {
-            console.log('Language Server parsing failed, falling back to regex parsing:', error);
+            // Reduce console noise - only show brief message
+            console.log('Language Server parsing failed, falling back to alternative parsing');
             try {
                 classStructure = await this.parseWithJavaParser(javaCode, filePath);
             } catch (error2) {
@@ -105,12 +106,14 @@ export class JavaCodeParser {
             );
 
             if (!symbols || symbols.length === 0) {
+                console.log('No symbols found in document, Language Server may not be ready');
                 throw new Error('No symbols found in document');
             }
 
             // Find the main class symbol
             const classSymbol = this.findMainClassSymbol(symbols);
             if (!classSymbol) {
+                console.log('No class symbol found in symbols:', symbols.map(s => s.name));
                 throw new Error('No class symbol found');
             }
 
@@ -172,7 +175,7 @@ export class JavaCodeParser {
 
         // Parse class declaration with better regex
         const classMatch = javaCode.match(
-            /(public\s+)?(abstract\s+)?(final\s+)?(class|interface|enum)\s+([a-zA-Z0-9_]+)(\s+extends\s+([a-zA-Z0-9_.<>]+))?(\s+implements\s+([a-zA-Z0-9_.<>,\s]+))?/
+            /(public\s+)?(abstract\s+)?(final\s+)?(class|interface|enum)\s+([a-zA-Z0-9_]+)(\s+extends\s+([a-zA-Z0-9_.<>,\s]+))?(\s+implements\s+([a-zA-Z0-9_.<>,\s]+))?/
         );
         
         if (classMatch) {
@@ -560,7 +563,15 @@ export class JavaCodeParser {
             );
 
             for (const classInfo of relatedClassInfos) {
-                if (classInfo.className !== mainClass.className) {
+                // 更严格的过滤：比较完整的类名（包名+类名）
+                const classFullName = classInfo.packageName ?
+                    `${classInfo.packageName}.${classInfo.className}` :
+                    classInfo.className;
+                const mainFullName = mainClass.packageName ?
+                    `${mainClass.packageName}.${mainClass.className}` :
+                    mainClass.className;
+
+                if (classFullName !== mainFullName) {
                     const relatedClass = this.convertClassInfoToJavaClassStructure(classInfo);
                     relatedClasses.push(relatedClass);
                 }
@@ -944,26 +955,37 @@ export class JavaCodeParser {
             let interfaces: string[] = [];
 
             if (isInterface) {
-                // 解析接口继承
+                // 解析接口继承 - 改进泛型处理
                 const interfaceExtendsMatch = new RegExp(`interface\\s+${simpleName}(?:\\s+extends\\s+([^{]+))?`, 'i').exec(text);
                 if (interfaceExtendsMatch && interfaceExtendsMatch[1]) {
-                    const parentInterfaces = interfaceExtendsMatch[1]
-                        .split(',')
-                        .map(i => i.trim())
-                        .filter(i => i.length > 0);
+                    const extendsClause = interfaceExtendsMatch[1].trim();
+                    const parentInterfaces = this.splitWithGenerics(extendsClause);
                     if (parentInterfaces.length > 0) {
-                        superClass = parentInterfaces[0]; // 主要父接口
+                        superClass = parentInterfaces[0].trim(); // 主要父接口
                         if (parentInterfaces.length > 1) {
-                            interfaces = parentInterfaces.slice(1); // 其他父接口
+                            interfaces = parentInterfaces.slice(1).map(i => i.trim()); // 其他父接口
                         }
                     }
                 }
             } else {
-                // 解析类继承
-                const extendsMatch = new RegExp(`class\\s+${simpleName}\\s+extends\\s+([a-zA-Z0-9_]+)`, 'i').exec(text);
-                const implementsMatch = new RegExp(`class\\s+${simpleName}[^{]*implements\\s+([^{]+)`, 'i').exec(text);
-                superClass = extendsMatch ? extendsMatch[1] : undefined;
-                interfaces = implementsMatch ? implementsMatch[1].split(',').map(s => s.trim()) : [];
+                // 解析类继承 - 使用更精确的方法处理泛型
+                // 首先找到完整的类声明
+                const classLineMatch = new RegExp(`class\\s+${simpleName}[^{]*`, 'i').exec(text);
+                if (classLineMatch) {
+                    const classDeclaration = classLineMatch[0];
+
+                    // 解析 extends 部分
+                    const extendsMatch = /extends\s+(.+?)(?:\s+implements|$)/i.exec(classDeclaration);
+                    if (extendsMatch) {
+                        superClass = this.extractCompleteGenericType(extendsMatch[1].trim());
+                    }
+
+                    // 解析 implements 部分
+                    const implementsMatch = /implements\s+(.+)$/i.exec(classDeclaration);
+                    if (implementsMatch) {
+                        interfaces = this.splitWithGenerics(implementsMatch[1]);
+                    }
+                }
             }
 
             const isAbstract = new RegExp(`abstract\\s+(class|interface)\\s+${simpleName}`, 'i').test(text);
@@ -989,6 +1011,62 @@ export class JavaCodeParser {
     private extractPackageFromSource(text: string): string | null {
         const m = /package\s+([a-zA-Z0-9_.]+);/.exec(text);
         return m ? m[1] : null;
+    }
+
+    private splitWithGenerics(typeList: string): string[] {
+        const result: string[] = [];
+        let current = '';
+        let angleBracketDepth = 0;
+
+        for (const char of typeList) {
+            if (char === '<') {
+                angleBracketDepth++;
+            } else if (char === '>') {
+                angleBracketDepth--;
+            }
+
+            if (char === ',' && angleBracketDepth === 0) {
+                result.push(current.trim());
+                current = '';
+            } else {
+                current += char;
+            }
+        }
+
+        if (current.trim()) {
+            result.push(current.trim());
+        }
+
+        return result.filter(s => s.length > 0);
+    }
+
+    private extractCompleteGenericType(typeString: string): string {
+        // 确保泛型括号匹配完整
+        let angleBracketDepth = 0;
+        let result = '';
+        let hasGeneric = false;
+
+        for (let i = 0; i < typeString.length; i++) {
+            const char = typeString[i];
+            result += char;
+
+            if (char === '<') {
+                angleBracketDepth++;
+                hasGeneric = true;
+            } else if (char === '>') {
+                angleBracketDepth--;
+                if (angleBracketDepth === 0 && hasGeneric) {
+                    // 找到完整的泛型类型，停止处理
+                    break;
+                }
+            } else if (char === ' ' && angleBracketDepth === 0 && hasGeneric) {
+                // 如果已经有完整的泛型，遇到空格就停止
+                result = result.slice(0, -1); // 移除最后的空格
+                break;
+            }
+        }
+
+        return result.trim();
     }
 
     private async collectFieldDependencies(

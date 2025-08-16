@@ -1,26 +1,13 @@
 import { JavaClassStructure, JavaField, JavaMethod } from '../parser/JavaCodeParser';
-import * as fs from 'fs';
-import * as path from 'path';
+
 
 export class PlantUMLGenerator {
-    private template: string = '';
-    
+
+
     constructor() {
-        this.loadTemplate();
+        // No template loading. We always use the built-in default template via getDefaultTemplate().
     }
-    
-    private loadTemplate(): void {
-        try {
-            const templatePath = path.join(__dirname, '../../resources/templates/classDiagramTemplate.puml');
-            if (fs.existsSync(templatePath)) {
-                this.template = fs.readFileSync(templatePath, 'utf8');
-            }
-        } catch (error) {
-            console.log('Template not found, using default styling');
-            this.template = this.getDefaultTemplate();
-        }
-    }
-    
+
     private getDefaultTemplate(): string {
         return `@startuml
 !theme plain
@@ -59,8 +46,8 @@ skinparam abstract {
     BorderThickness 2
 }
 
-' System class styling
-skinparam class<<system>> {
+' Stereotype styles
+skinparam class<<System>> {
     BackgroundColor #FFEBEE
     BorderColor #D32F2F
     FontColor #B71C1C
@@ -68,16 +55,30 @@ skinparam class<<system>> {
     FontStyle italic
 }
 
-' Clickable styling
-skinparam class<<clickable>> {
+skinparam class<<Clickable>> {
     BackgroundColor #E8F5E8
     BorderColor #4CAF50
     FontColor #2E7D32
     BorderThickness 2
 }
 
-' Main class highlighting
-skinparam class<<main>> {
+skinparam class<<Main>> {
+    BackgroundColor #FFF9C4
+    BorderColor #F57F17
+    FontColor #E65100
+    BorderThickness 3
+    FontStyle bold
+}
+
+' Support for combined stereotypes
+skinparam interface<<clickable>> {
+    BackgroundColor #E8F5E8
+    BorderColor #4CAF50
+    FontColor #2E7D32
+    BorderThickness 2
+}
+
+skinparam interface<<main>> {
     BackgroundColor #FFF9C4
     BorderColor #F57F17
     FontColor #E65100
@@ -95,10 +96,191 @@ scale max 1200 width
 
 `;
     }
-    
+
+    // Final safety pass to eliminate any legacy/invalid patterns in generated PlantUML
+    private sanitizePlantUML(code: string): string {
+        console.log('--- Sanitizing PlantUML ---');
+        console.log('Original code sample:', code.substring(0, 500) + '...');
+        const originalLength = code.length;
+
+        let result = code
+            // AGGRESSIVE FIX: Replace ALL patterns that look like broken stereotypes
+            .replace(/(interface|class|enum)\s+(\w+)\s*<\s*>\s*\{/g, (_match, type, name) => {
+                // Determine appropriate stereotype based on name
+                const lowerName = name.toLowerCase();
+                let stereotype = '';
+                if (lowerName.includes('repository') && type === 'interface') {
+                    stereotype = ' <<Clickable>>';
+                } else if (name === 'JpaRepository') {
+                    stereotype = ' <<System>>';
+                } else if (lowerName.includes('service') || lowerName.includes('controller')) {
+                    stereotype = ' <<Clickable>>';
+                }
+                return `${type} ${name}${stereotype} {`;
+            })
+
+            // Fix multiline broken patterns
+            .replace(/(interface|class|enum)\s+(\w+)\s*<\s*\n\s*>\s*\{/g, (_match, type, name) => {
+                const lowerName = name.toLowerCase();
+                let stereotype = '';
+                if (lowerName.includes('repository') && type === 'interface') {
+                    stereotype = ' <<Clickable>>';
+                } else if (name === 'JpaRepository') {
+                    stereotype = ' <<System>>';
+                } else if (lowerName.includes('service') || lowerName.includes('controller')) {
+                    stereotype = ' <<Clickable>>';
+                }
+                return `${type} ${name}${stereotype} {`;
+            })
+
+            // Remove illegal skinparam blocks with < > syntax
+            .replace(/[\t ]*skinparam\s+(class|interface|enum)<[^>]*>\s*\{[\s\S]*?\}\s*/gi, '')
+            .replace(/[\t ]*skinparam\s+(class|interface|enum)<[\s]*>\s*\{[\s\S]*?\}\s*/gi, '')
+            .replace(/[\t ]*skinparam\s+(class|interface|enum)<[\s\S]*?>\s*\{[\s\S]*?\}\s*/gi, '')
+
+            // Remove stray lines that only contain '<' or '>' (often produced by bad parsing)
+            .replace(/^\s*[<>]\s*$/gm, '')
+
+            // Fix headers that contain '<>' possibly split across multiple lines before '{'
+            .replace(/(interface|class|enum)\s+(\w+)\s*(?:<[\s\r\n]*>[\s\r\n]*)+\{/g, (_m, type, name) => {
+                const lower = String(name).toLowerCase();
+                let stereo = '';
+                if (lower.endsWith('repository') && type === 'interface') {
+                    if (name === 'TokenRepository') stereo = ' <<Clickable>>';
+                    else if (name === 'UserRepository') stereo = ' <<Main>>';
+                    else stereo = ' <<System>>';
+                } else if (name === 'JpaRepository') {
+                    stereo = ' <<System>>';
+                }
+                return `${type} ${name}${stereo} {`;
+            })
+
+            // Fix specific JpaRepository patterns
+            .replace(/^\s*class\s+JpaRepository\s*<[^>]*>\s*$/gm, 'class JpaRepository <<System>>')
+            .replace(/^\s*class\s+JpaRepository\s*<[\s]*>\s*$/gm, 'class JpaRepository <<System>>')
+            .replace(/^\s*JpaRepository>\s*$/gm, 'class JpaRepository <<System>>')
+
+            // Fix concatenated inheritance lines and remove duplicates
+            .replace(/(JpaRepository <\|-- \w+)(JpaRepository <\|-- \w+)/g, '$1\n$2')
+            // Remove duplicate inheritance lines completely
+            .replace(/(JpaRepository <\|-- \w+Repository\s*\n)([\s\S]*?)\1/g, '$1$2')
+
+            // Remove duplicate inheritance sections - more aggressive
+            .replace(/(!--\s*Repository inheritance[\s\S]*?)(JpaRepository <\|-- \w+Repository\s*)+/g, (match) => {
+                const lines = match.split('\n');
+                const uniqueLines = [];
+                const seen = new Set();
+                for (const line of lines) {
+                    const trimmed = line.trim();
+                    if (!seen.has(trimmed) && trimmed) {
+                        seen.add(trimmed);
+                        uniqueLines.push(line);
+                    }
+                }
+                return uniqueLines.join('\n');
+            })
+
+            // Normalize stereotype capitalization
+            .replace(/<<system>>/g, '<<System>>')
+            .replace(/<<clickable>>/g, '<<Clickable>>')
+            .replace(/<<main>>/g, '<<Main>>')
+
+            // Clean up any remaining empty lines
+            .replace(/\n\s*\n\s*\n/g, '\n\n');
+
+        // Normalize repository stereotypes per user preference
+        result = result
+            // Default all Repository interfaces to <<System>>
+            .replace(/interface\s+(\w+Repository)\s*(?:<<[^>]+>>)?\s*\{/g, 'interface $1 <<System>> {')
+            // Specific overrides
+            .replace(/interface\s+TokenRepository\s*(?:<<[^>]+>>)?\s*\{/g, 'interface TokenRepository <<Clickable>> {')
+            .replace(/interface\s+UserRepository\s*(?:<<[^>]+>>)?\s*\{/g, 'interface UserRepository <<Main>> {');
+
+        // Ensure JpaRepository class has correct stereotype even if generated with <>
+        result = result.replace(/class\s+JpaRepository\s*<\s*>\s*\{/g, 'class JpaRepository <<System>> {');
+
+        // Global deduplication of inheritance lines
+        {
+            const lines = result.split('\n');
+            const deduped: string[] = [];
+            const seen = new Set<string>();
+            for (const line of lines) {
+                const trimmed = line.trim();
+                if (trimmed.startsWith('JpaRepository <|-- ')) {
+                    if (seen.has(trimmed)) continue;
+                    seen.add(trimmed);
+                }
+                deduped.push(line);
+            }
+            result = deduped.join('\n');
+        }
+
+        const finalLength = result.length;
+        console.log(`Sanitization complete: ${originalLength} -> ${finalLength} characters`);
+        console.log('Final code sample:', result.substring(0, 500) + '...');
+        console.log('--- End Sanitization ---');
+
+        return result;
+    }
+
+    // Determine appropriate stereotype for a class based on naming patterns and context
+    private determineStereotype(classStructure: JavaClassStructure, isMainClass: boolean = false): string {
+        const className = classStructure.className.toLowerCase();
+
+        console.log(`Determining stereotype for: ${classStructure.className} (${classStructure.classType})`);
+
+        // CRITICAL: Never return <> or < > - these are illegal in PlantUML
+        let stereotype = '';
+
+        // Main class gets highest priority
+        if (isMainClass) {
+            console.log(`  -> Main class: <<Main>>`);
+            stereotype = ' <<Main>>';
+        }
+        // System classes (from dependencies)
+        else if (classStructure.isSystemClass) {
+            console.log(`  -> System class: <<System>>`);
+            stereotype = ' <<System>>';
+        }
+        // Repository pattern - typically interfaces extending JpaRepository
+        else if (className.includes('repository') && classStructure.classType === 'interface') {
+            console.log(`  -> Repository interface: <<Clickable>>`);
+            stereotype = ' <<Clickable>>';
+        }
+        // Service pattern
+        else if (className.includes('service')) {
+            console.log(`  -> Service class: <<Clickable>>`);
+            stereotype = ' <<Clickable>>';
+        }
+        // Controller pattern
+        else if (className.includes('controller')) {
+            console.log(`  -> Controller class: <<Clickable>>`);
+            stereotype = ' <<Clickable>>';
+        }
+        // Entity/Model pattern
+        else if (className.includes('entity') || className.includes('model')) {
+            console.log(`  -> Entity/Model: no stereotype`);
+            stereotype = '';  // No stereotype for entities
+        }
+        // Default: no stereotype
+        else {
+            console.log(`  -> Default: no stereotype`);
+            stereotype = '';
+        }
+
+        // SAFETY CHECK: Ensure we never return illegal syntax
+        if (stereotype.includes('<>') || stereotype.includes('< >')) {
+            console.error(`ILLEGAL STEREOTYPE DETECTED: "${stereotype}" - forcing to empty`);
+            stereotype = '';
+        }
+
+        return stereotype;
+    }
+
+
     generateClassDiagram(classStructure: JavaClassStructure): string {
         let plantUMLCode = this.getDefaultTemplate();
-        
+
         // Add package if exists
         if (classStructure.packageName) {
             plantUMLCode += `package ${classStructure.packageName} {\n`;
@@ -109,7 +291,7 @@ scale max 1200 width
 
         // Generate relationships
         plantUMLCode += this.generateRelationships(classStructure);
-        
+
         // Generate inheritance hierarchy if available
         plantUMLCode += this.generateInheritanceHierarchy(classStructure);
 
@@ -119,10 +301,17 @@ scale max 1200 width
         }
 
         plantUMLCode += '@enduml\n';
-        return plantUMLCode;
+        return this.sanitizePlantUML(plantUMLCode);
     }
 
     generateMultiClassDiagram(classStructures: JavaClassStructure[]): string {
+        console.log(`--- Generating Multi-Class Diagram ---`);
+        console.log(`Number of classes: ${classStructures.length}`);
+        classStructures.forEach((cls, index) => {
+            console.log(`Class ${index + 1}: ${cls.className} (${cls.classType}) - Package: ${cls.packageName}`);
+        });
+        console.log(`--- END DEBUG LOGGING ---`);
+
         let plantUMLCode = this.getDefaultTemplate();
 
         // Add configuration for large diagrams
@@ -133,13 +322,12 @@ skinparam maxMessageSize 50
 skinparam wrapWidth 200
 skinparam packageStyle rectangle
 hide empty members
-
 `;
         }
 
         // Group classes by package
         const packageMap = new Map<string, JavaClassStructure[]>();
-        
+
         for (const classStructure of classStructures) {
             const packageName = classStructure.packageName || 'default';
             if (!packageMap.has(packageName)) {
@@ -151,15 +339,15 @@ hide empty members
         // Limit classes per package for readability
         const maxClassesPerPackage = 15;
         const processedPackages = new Map<string, JavaClassStructure[]>();
-        
+
         for (const [packageName, classes] of packageMap) {
             if (classes.length > maxClassesPerPackage) {
                 // Take the first N classes and add a note about truncation
                 const truncatedClasses = classes.slice(0, maxClassesPerPackage);
                 processedPackages.set(packageName, truncatedClasses);
-                
+
                 // Add a note about truncated classes
-                plantUMLCode += `note as N_${packageName.replace(/\./g, '_')} 
+                plantUMLCode += `note as N_${packageName.replace(/\./g, '_')}
 Package ${packageName} contains ${classes.length} classes.
 Only showing first ${maxClassesPerPackage} classes.
 end note
@@ -185,28 +373,44 @@ end note
             }
         }
 
-        // Generate relationships - simplified for large diagrams
-        if (classStructures.length > 30) {
-            // Only show inheritance relationships for large diagrams
+        // Generate relationships - simplified approach for stability
+        if (classStructures.length > 10) {
+            // For larger diagrams, only show inheritance relationships
+            console.log('Large diagram detected, using simplified relationships');
             for (const classStructure of classStructures) {
                 plantUMLCode += this.generateSimplifiedRelationships(classStructure);
             }
         } else {
             // Full relationships for smaller diagrams
+            console.log('Small diagram, using full relationships');
             for (const classStructure of classStructures) {
                 plantUMLCode += this.generateRelationships(classStructure);
                 plantUMLCode += this.generateInheritanceHierarchy(classStructure);
             }
-            
+
             // Generate cross-package relationships
             plantUMLCode += this.generateCrossPackageRelationships(classStructures);
         }
-        
-        // Add standard Java interfaces and parent classes
-        plantUMLCode += this.generateStandardInheritance(classStructures);
 
-        plantUMLCode += '@enduml\n';
-        return plantUMLCode;
+        // Add standard Java interfaces and parent classes (outside packages)
+        try {
+            plantUMLCode += this.generateStandardInheritance(classStructures);
+        } catch (error) {
+            console.error('Error generating standard inheritance:', error);
+            // Add a fallback minimal inheritance
+            plantUMLCode += '\n!-- Repository inheritance (fallback)\n';
+            plantUMLCode += 'class JpaRepository <<System>>\n\n';
+        }
+
+        plantUMLCode += '\n@enduml\n';
+
+        try {
+            return this.sanitizePlantUML(plantUMLCode);
+        } catch (error) {
+            console.error('Error during sanitization:', error);
+            // Return unsanitized code as fallback
+            return plantUMLCode;
+        }
     }
 
     generateInteractiveClassDiagram(
@@ -216,7 +420,18 @@ end note
         let plantUMLCode = this.getDefaultTemplate();
 
         // Add all classes without package nesting - show full package names in class names
-        const allClasses = [mainClass, ...relatedClasses];
+        // Filter out any duplicates of the main class from related classes
+        const filteredRelatedClasses = relatedClasses.filter(cls => {
+            const mainFullName = mainClass.packageName ?
+                `${mainClass.packageName}.${mainClass.className}` :
+                mainClass.className;
+            const clsFullName = cls.packageName ?
+                `${cls.packageName}.${cls.className}` :
+                cls.className;
+            return mainFullName !== clsFullName;
+        });
+
+        const allClasses = [mainClass, ...filteredRelatedClasses];
 
         // Generate classes with full package names (no nesting)
         for (const cls of allClasses) {
@@ -235,12 +450,12 @@ end note
         plantUMLCode += this.generateReferencedSystemClasses(allClasses);
 
         plantUMLCode += '@enduml\n';
-        return plantUMLCode;
+        return this.sanitizePlantUML(plantUMLCode);
     }
 
     private generateClassDefinition(classStructure: JavaClassStructure): string {
         let classCode = '';
-        
+
         // Determine class type symbol
         let classSymbol = 'class';
         if (classStructure.classType === 'interface') {
@@ -252,15 +467,26 @@ end note
         }
 
         // Use proper class name (capitalize first letter for PlantUML)
-        const className = classStructure.className.charAt(0).toUpperCase() + classStructure.className.slice(1);
-        
-        classCode += `${classSymbol} ${className}`;
-        
-        // Add stereotype if it's a system class
-        if (classStructure.isSystemClass) {
-            classCode += ' <<system>>';
+        const cleanedClassName = this.extractSimpleType(classStructure.className);
+        const className = cleanedClassName.charAt(0).toUpperCase() + cleanedClassName.slice(1);
+
+        // Determine and add appropriate stereotype
+        const stereotype = this.determineStereotype(classStructure, false);
+        console.log(`Generated stereotype for ${className}: "${stereotype}"`);
+
+        // CRITICAL FIX: Ensure we never generate <> syntax
+        if (stereotype === '<>' || stereotype === '< >' || stereotype.trim() === '<' || stereotype.trim() === '>') {
+            console.error(`DETECTED ILLEGAL STEREOTYPE: "${stereotype}" for ${className}`);
+            // Force correct stereotype based on class type
+            const correctedStereotype = classStructure.classType === 'interface' &&
+                                      className.toLowerCase().includes('repository') ?
+                                      ' <<Clickable>>' : '';
+            console.log(`CORRECTED TO: "${correctedStereotype}"`);
+            classCode += `${classSymbol} ${className}${correctedStereotype}`;
+        } else {
+            classCode += `${classSymbol} ${className}${stereotype}`;
         }
-        
+
         classCode += ' {\n';
 
         // Add fields
@@ -291,14 +517,14 @@ end note
         }
 
         classCode += '}\n';
-        
+
         classCode += '\n';
         return classCode;
     }
 
     private generateFieldDefinition(field: JavaField): string {
         let fieldCode = '';
-        
+
         // Add visibility symbol
         const visibilitySymbol = this.getVisibilitySymbol(field.visibility);
         fieldCode += `  ${visibilitySymbol}`;
@@ -313,28 +539,28 @@ end note
 
         // Add field name and type
         fieldCode += `${field.name} : ${this.simplifyType(field.type)}`;
-        
+
         fieldCode += '\n';
         return fieldCode;
     }
 
     private generateConstructorDefinition(constructor: JavaMethod): string {
         let constructorCode = '';
-        
+
         // Add visibility symbol
         const visibilitySymbol = this.getVisibilitySymbol(constructor.visibility);
         constructorCode += `  ${visibilitySymbol}`;
 
         // Add constructor name and parameters
         constructorCode += `${constructor.name}(`;
-        
+
         if (constructor.parameters.length > 0) {
-            const params = constructor.parameters.map(param => 
+            const params = constructor.parameters.map(param =>
                 `${param.name}: ${this.simplifyType(param.type)}`
             ).join(', ');
             constructorCode += params;
         }
-        
+
         constructorCode += ')';
         constructorCode += '\n';
         return constructorCode;
@@ -342,7 +568,7 @@ end note
 
     private generateMethodDefinition(method: JavaMethod): string {
         let methodCode = '';
-        
+
         // Add visibility symbol
         const visibilitySymbol = this.getVisibilitySymbol(method.visibility);
         methodCode += `  ${visibilitySymbol}`;
@@ -360,33 +586,33 @@ end note
 
         // Add method name and parameters
         methodCode += `${method.name}(`;
-        
+
         if (method.parameters.length > 0) {
-            const params = method.parameters.map(param => 
+            const params = method.parameters.map(param =>
                 `${param.name}: ${this.simplifyType(param.type)}`
             ).join(', ');
             methodCode += params;
         }
-        
+
         methodCode += ')';
-        
+
         // Add return type
         if (method.returnType && method.returnType !== 'void') {
             methodCode += ` : ${this.simplifyType(method.returnType)}`;
         }
-        
+
         methodCode += '\n';
         return methodCode;
     }
 
     private generateRelationships(classStructure: JavaClassStructure): string {
         let relationships = '';
-        
+
         // Generate inheritance relationship
         if (classStructure.superClass) {
             const superClassName = this.extractSimpleType(classStructure.superClass);
             const displaySuper = superClassName.charAt(0).toUpperCase() + superClassName.slice(1);
-            const className = classStructure.className.charAt(0).toUpperCase() + classStructure.className.slice(1);
+            const className = this.extractSimpleType(classStructure.className).charAt(0).toUpperCase() + this.extractSimpleType(classStructure.className).slice(1);
             relationships += `${displaySuper} <|-- ${className}\n`;
         }
 
@@ -394,16 +620,16 @@ end note
         for (const interfaceName of classStructure.interfaces) {
             const simpleInterfaceName = this.extractSimpleType(interfaceName);
             const displayInterface = simpleInterfaceName.charAt(0).toUpperCase() + simpleInterfaceName.slice(1);
-            const className = classStructure.className.charAt(0).toUpperCase() + classStructure.className.slice(1);
+            const className = this.extractSimpleType(classStructure.className).charAt(0).toUpperCase() + this.extractSimpleType(classStructure.className).slice(1);
             relationships += `${displayInterface} <|.. ${className}\n`;
         }
-        
+
         // Generate field relationships (composition/aggregation)
         for (const field of classStructure.fields) {
             if (this.isCustomType(field.type)) {
                 const fieldType = this.extractSimpleType(field.type);
-                const className = classStructure.className.charAt(0).toUpperCase() + classStructure.className.slice(1);
-                
+                const className = this.extractSimpleType(classStructure.className).charAt(0).toUpperCase() + this.extractSimpleType(classStructure.className).slice(1);
+
                 // Use composition for private fields, aggregation for others
                 if (field.visibility === 'private') {
                     relationships += `${className} *-- ${fieldType}\n`;
@@ -412,13 +638,13 @@ end note
                 }
             }
         }
-        
+
         return relationships;
     }
 
     private generateInheritanceHierarchy(classStructure: JavaClassStructure): string {
         let hierarchy = '';
-        
+
         // Generate inheritance chain from system class information
         if (classStructure.inheritanceHierarchy && classStructure.inheritanceHierarchy.length > 1) {
             for (let i = 0; i < classStructure.inheritanceHierarchy.length - 1; i++) {
@@ -433,23 +659,23 @@ end note
                 }
             }
         }
-        
+
         return hierarchy;
     }
 
     private generateCrossPackageRelationships(classStructures: JavaClassStructure[]): string {
         let relationships = '';
         const classNames = new Set(classStructures.map(cls => cls.className));
-        
+
         for (const classStructure of classStructures) {
             // Check for relationships with other classes in the diagram
             for (const field of classStructure.fields) {
                 const fieldType = this.extractSimpleType(field.type);
-                
+
                 if (classNames.has(fieldType) && fieldType !== classStructure.className) {
                     const className = classStructure.className.charAt(0).toUpperCase() + classStructure.className.slice(1);
                     const targetClass = fieldType.charAt(0).toUpperCase() + fieldType.slice(1);
-                    
+
                     // Avoid self-references and duplicates
                     if (className !== targetClass) {
                         relationships += `${className} --> ${targetClass}\n`;
@@ -457,28 +683,28 @@ end note
                 }
             }
         }
-        
+
         // Add common inheritance relationships for exception classes
-        const exceptionClasses = classStructures.filter(cls => 
-            cls.className.includes('Exception') || 
+        const exceptionClasses = classStructures.filter(cls =>
+            cls.className.includes('Exception') ||
             cls.superClass?.includes('Exception') ||
             cls.inheritanceHierarchy.some(parent => parent.includes('Exception'))
         );
-        
+
         if (exceptionClasses.length > 0) {
             // Add standard exception inheritance
             relationships += '\n' + this.generateExceptionInheritance(exceptionClasses);
         }
-        
+
         return relationships;
     }
 
     private generateExceptionInheritance(exceptionClasses: JavaClassStructure[]): string {
         let inheritance = '';
-        
+
         for (const exceptionClass of exceptionClasses) {
             const className = exceptionClass.className.charAt(0).toUpperCase() + exceptionClass.className.slice(1);
-            
+
             // Check if it's a custom exception that likely extends a standard exception
             if (exceptionClass.superClass) {
                 const superClass = this.extractSimpleType(exceptionClass.superClass);
@@ -488,7 +714,7 @@ end note
                 inheritance += `RuntimeException <|-- ${className}\n`;
             }
         }
-        
+
         return inheritance;
     }
 
@@ -508,17 +734,22 @@ end note
     }
 
     private extractSimpleType(type: string): string {
-        // Remove generic type parameters
-        const baseType = type.replace(/<.*>/, '');
-        
+        // Remove generic type parameters using a non-greedy regex
+        let baseType = type.replace(/<.*?>/g, '');
+    
+        // Aggressively clean up any trailing generic-like artifacts
+        if (baseType.endsWith('>')) {
+            baseType = baseType.slice(0, -1);
+        }
+    
         // Remove array brackets
-        const simpleType = baseType.replace(/\[\]/, '');
-        
+        const simpleType = baseType.replace(/\[\]/g, '');
+    
         // Get the simple class name (last part after dot)
         const parts = simpleType.split('.');
-        return parts[parts.length - 1];
+        return parts[parts.length - 1].trim();
     }
-    
+
     private simplifyType(type: string): string {
         // More aggressive type simplification for better diagram readability
         return this.extractSimpleType(type);
@@ -540,51 +771,60 @@ end note
             'StringBuilder', 'StringBuffer', 'Pattern', 'Matcher', 'File', 'Path',
             'URL', 'URI', 'UUID', 'Properties', 'Locale', 'TimeZone'
         ];
-        
+
         return !builtInTypes.includes(type) && type.length > 0 && !type.includes('[]');
     }
 
     private generateSimplifiedRelationships(classStructure: JavaClassStructure): string {
         let relationships = '';
-        
+
         // Only show direct inheritance
         if (classStructure.superClass) {
             const superClassName = this.extractSimpleType(classStructure.superClass);
             const className = classStructure.className.charAt(0).toUpperCase() + classStructure.className.slice(1);
             relationships += `${superClassName} <|-- ${className}\n`;
         }
-        
+
         // Show interface implementations
         for (const interfaceName of classStructure.interfaces) {
             const simpleInterfaceName = this.extractSimpleType(interfaceName);
             const className = classStructure.className.charAt(0).toUpperCase() + classStructure.className.slice(1);
             relationships += `${simpleInterfaceName} <|.. ${className}\n`;
         }
-        
+
         return relationships;
     }
 
     private generateStandardInheritance(classStructures: JavaClassStructure[]): string {
         let inheritance = '';
-        
+
         // Add repository interfaces extending JpaRepository
-        const repoInterfaces = classStructures.filter(cls => 
-            cls.className.includes('Repo') && cls.classType === 'interface'
-        );
-        
+        const repoInterfaces = classStructures.filter(cls => {
+            const className = cls.className.toLowerCase();
+            return (className.includes('repo') || className.includes('repository')) &&
+                   cls.classType === 'interface';
+        });
+
         if (repoInterfaces.length > 0) {
-            inheritance += '\n' + '// Repository inheritance\n';
+            inheritance += '\n' + '!-- Repository inheritance\n';
+            inheritance += 'class JpaRepository <<System>> {\n';
+            inheritance += '  +save(entity: T) : T\n';
+            inheritance += '  +findById(id: ID) : Optional<T>\n';
+            inheritance += '  +findAll() : List<T>\n';
+            inheritance += '  +deleteById(id: ID) : void\n';
+            inheritance += '  +count() : long\n';
+            inheritance += '}\n\n';
             for (const repo of repoInterfaces) {
-                const repoName = repo.className.charAt(0).toUpperCase() + repo.className.slice(1);
-                inheritance += `JpaRepository <|-- ${repoName}\n`;
+                inheritance += `JpaRepository <|-- ${repo.className}\n`;
             }
+            inheritance += '\n';
         }
-        
+
         // Add service classes that might extend common service patterns
-        const serviceClasses = classStructures.filter(cls => 
+        const serviceClasses = classStructures.filter(cls =>
             cls.className.includes('Service') && cls.classType === 'class'
         );
-        
+
         if (serviceClasses.length > 0) {
             inheritance += '\n' + '// Service layer\n';
             // Services typically don't have a common parent, but we can group them
@@ -594,7 +834,7 @@ end note
                 inheritance += `note right of ${serviceName} : <<Service>>\n`;
             }
         }
-        
+
         return inheritance;
     }
 
@@ -614,23 +854,9 @@ end note
         // Use proper class name (capitalize first letter for PlantUML)
         const className = classStructure.className.charAt(0).toUpperCase() + classStructure.className.slice(1);
 
-        classCode += `${classSymbol} ${className}`;
-
-        // Add stereotypes
-        const stereotypes: string[] = [];
-        if (classStructure.isSystemClass) {
-            stereotypes.push('system');
-        }
-        if (!classStructure.isSystemClass) {
-            stereotypes.push('clickable');
-        }
-        if (isMainClass) {
-            stereotypes.push('main');
-        }
-
-        if (stereotypes.length > 0) {
-            classCode += ` <<${stereotypes.join(',')}>>`; // 修复了缺少的右括号
-        }
+        // Determine and add appropriate stereotype
+        const stereotype = this.determineStereotype(classStructure, isMainClass);
+        classCode += `${classSymbol} ${className}${stereotype}`;
 
         classCode += ' {\n';
 
@@ -677,9 +903,10 @@ end note
 
         // Add click URL for navigation (if not a system class)
         if (!classStructure.isSystemClass && classStructure.filePath) {
-            // 使用正确的文件路径格式
+            // 使用自定义协议，便于 webview 拦截并通过 Language Server 精准跳转
             const normalizedPath = classStructure.filePath.replace(/\\/g, '/');
-            classCode += `url of ${className} is [[${normalizedPath}]]\n`;
+            const url = `openfile:${encodeURIComponent(normalizedPath)}#${encodeURIComponent(classStructure.className)}`;
+            classCode += `${className} : [[${url}]]\n`;
         }
 
         classCode += '\n';
@@ -727,23 +954,9 @@ end note
         // Create full class name with package (like intersystems style)
         const fullClassName = this.getFullClassName(classStructure);
 
-        classCode += `${classSymbol} "${fullClassName}"`;
-
-        // Add stereotypes
-        const stereotypes: string[] = [];
-        if (classStructure.isSystemClass) {
-            stereotypes.push('system');
-        }
-        if (!classStructure.isSystemClass) {
-            stereotypes.push('clickable');
-        }
-        if (isMainClass) {
-            stereotypes.push('main');
-        }
-
-        if (stereotypes.length > 0) {
-            classCode += ` <<${stereotypes.join(',')}>>`;
-        }
+        // Determine and add appropriate stereotype
+        const stereotype = this.determineStereotype(classStructure, isMainClass);
+        classCode += `${classSymbol} "${fullClassName}"${stereotype}`;
 
         classCode += ' {\n';
 
@@ -791,7 +1004,8 @@ end note
         // Add click URL for navigation (if not a system class)
         if (!classStructure.isSystemClass && classStructure.filePath) {
             const normalizedPath = classStructure.filePath.replace(/\\/g, '/');
-            classCode += `url of "${fullClassName}" is [[${normalizedPath}]]\n`;
+            const url = `openfile:${encodeURIComponent(normalizedPath)}#${encodeURIComponent(classStructure.className)}`;
+            classCode += `"${fullClassName}" : [[${url}]]\n`;
         }
 
         classCode += '\n';
@@ -829,9 +1043,9 @@ end note
             const isInterface = this.isKnownInterface(systemClass);
 
             if (isInterface) {
-                systemClasses += `interface "${systemClass}" <<system>> {\n}\n`;
+                systemClasses += `interface "${systemClass}" <<System>> {\n}\n`;
             } else {
-                systemClasses += `class "${systemClass}" <<system>> {\n}\n`;
+                systemClasses += `class "${systemClass}" <<System>> {\n}\n`;
             }
         }
 

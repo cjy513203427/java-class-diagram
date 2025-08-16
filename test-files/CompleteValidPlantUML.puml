@@ -1,0 +1,76 @@
+@startuml
+!theme plain
+skinparam classAttributeIconSize 0
+skinparam classFontSize 12
+skinparam packageFontSize 14
+skinparam backgroundColor #FFFFFF
+
+' Enhanced styling similar to intersystems-objectscript-class-diagram-view
+skinparam class {
+    BackgroundColor #F8F9FA
+    BorderColor #2E86AB
+    FontColor #212529
+    BorderThickness 2
+    FontStyle bold
+}
+
+skinparam interface {
+    BackgroundColor #E3F2FD
+    BorderColor #1976D2
+    FontColor #0D47A1
+    BorderThickness 2
+}
+
+left to right direction
+scale max 1200 width
+
+package "com.webtutsplus.ecommerce.repository" {
+interface CartRepository {
+  ~findAllByUserOrderByCreatedDateDesc(user: User) : List
+  ~deleteByUser(user: User) : List
+}
+
+interface Categoryrepository {
+  ~findByCategoryName(categoryName: String) : Category
+}
+
+interface OrderItemsRepository {
+}
+
+interface OrderRepository {
+  ~findAllByUserOrderByCreatedDateDesc(user: User) : List
+}
+
+interface ProductRepository {
+}
+
+interface TokenRepository {
+  ~findTokenByUser(user: User) : AuthenticationToken
+  ~findTokenByToken(token: String) : AuthenticationToken
+}
+
+interface UserRepository {
+  ~findAll() : List
+  ~findByEmail(email: String) : User
+  ~findUserByEmail(email: String) : User
+}
+
+interface WishListRepository {
+  ~findAllByUserIdOrderByCreatedDateDesc(userId: Integer) : List
+}
+
+}
+
+!-- Repository inheritance
+class JpaRepository <<System>>
+
+JpaRepository <|-- CartRepository
+JpaRepository <|-- Categoryrepository
+JpaRepository <|-- OrderItemsRepository
+JpaRepository <|-- OrderRepository
+JpaRepository <|-- ProductRepository
+JpaRepository <|-- TokenRepository
+JpaRepository <|-- UserRepository
+JpaRepository <|-- WishListRepository
+
+@enduml

@@ -219,6 +219,11 @@ class JavaLanguageServerClient {
             // Get document symbols to extract class details
             const document = await vscode.workspace.openTextDocument(classSymbol.location.uri);
             const documentSymbols = await vscode.commands.executeCommand('vscode.executeDocumentSymbolProvider', document.uri);
+            // Check if documentSymbols is valid and iterable
+            if (!documentSymbols || !Array.isArray(documentSymbols)) {
+                console.warn(`No document symbols found for ${className}, falling back to system class info`);
+                return await this.getSystemClassInfo(className);
+            }
             return this.parseDocumentSymbols(documentSymbols, className, document);
         }
         catch (error) {
@@ -334,45 +339,47 @@ class JavaLanguageServerClient {
         const methods = [];
         const constructors = [];
         // Parse class members
-        for (const child of classSymbol.children) {
-            switch (child.kind) {
-                case vscode.SymbolKind.Field:
-                case vscode.SymbolKind.Property:
-                    fields.push({
-                        name: child.name,
-                        type: child.detail || 'unknown',
-                        modifiers: [],
-                        location: {
-                            uri: document.uri.toString(),
-                            range: {
-                                start: { line: child.range.start.line, character: child.range.start.character },
-                                end: { line: child.range.end.line, character: child.range.end.character }
+        if (classSymbol.children && Array.isArray(classSymbol.children)) {
+            for (const child of classSymbol.children) {
+                switch (child.kind) {
+                    case vscode.SymbolKind.Field:
+                    case vscode.SymbolKind.Property:
+                        fields.push({
+                            name: child.name,
+                            type: child.detail || 'unknown',
+                            modifiers: [],
+                            location: {
+                                uri: document.uri.toString(),
+                                range: {
+                                    start: { line: child.range.start.line, character: child.range.start.character },
+                                    end: { line: child.range.end.line, character: child.range.end.character }
+                                }
                             }
-                        }
-                    });
-                    break;
-                case vscode.SymbolKind.Method:
-                    const methodInfo = {
-                        name: child.name,
-                        returnType: child.detail || 'void',
-                        parameters: [],
-                        modifiers: [],
-                        exceptions: [],
-                        location: {
-                            uri: document.uri.toString(),
-                            range: {
-                                start: { line: child.range.start.line, character: child.range.start.character },
-                                end: { line: child.range.end.line, character: child.range.end.character }
+                        });
+                        break;
+                    case vscode.SymbolKind.Method:
+                        const methodInfo = {
+                            name: child.name,
+                            returnType: child.detail || 'void',
+                            parameters: [],
+                            modifiers: [],
+                            exceptions: [],
+                            location: {
+                                uri: document.uri.toString(),
+                                range: {
+                                    start: { line: child.range.start.line, character: child.range.start.character },
+                                    end: { line: child.range.end.line, character: child.range.end.character }
+                                }
                             }
+                        };
+                        if (child.name === className) {
+                            constructors.push(methodInfo);
                         }
-                    };
-                    if (child.name === className) {
-                        constructors.push(methodInfo);
-                    }
-                    else {
-                        methods.push(methodInfo);
-                    }
-                    break;
+                        else {
+                            methods.push(methodInfo);
+                        }
+                        break;
+                }
             }
         }
         // Extract inheritance information from the document text
@@ -399,6 +406,10 @@ class JavaLanguageServerClient {
         };
     }
     findClassSymbol(symbols, className) {
+        // Check if symbols is valid and iterable
+        if (!symbols || !Array.isArray(symbols)) {
+            return null;
+        }
         for (const symbol of symbols) {
             if ((symbol.kind === vscode.SymbolKind.Class ||
                 symbol.kind === vscode.SymbolKind.Interface ||
@@ -407,9 +418,11 @@ class JavaLanguageServerClient {
                 return symbol;
             }
             // Search in children recursively
-            const found = this.findClassSymbol(symbol.children, className);
-            if (found) {
-                return found;
+            if (symbol.children && Array.isArray(symbol.children)) {
+                const found = this.findClassSymbol(symbol.children, className);
+                if (found) {
+                    return found;
+                }
             }
         }
         return null;

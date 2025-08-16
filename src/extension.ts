@@ -2,10 +2,12 @@ import * as vscode from 'vscode';
 import { JavaCodeParser } from './parser/JavaCodeParser';
 import { PlantUMLGenerator } from './plantuml/PlantUMLGenerator';
 import { testSystemClassParser } from './parser/SystemClassParser';
+import { ClassDiagramWebviewProvider } from './webview/ClassDiagramWebviewProvider';
 import * as path from 'path';
 import * as fs from 'fs';
 
 let currentPanel: vscode.WebviewPanel | undefined;
+let webviewProvider: ClassDiagramWebviewProvider;
 
 export async function activate(context: vscode.ExtensionContext) {
     console.log('Java Class Diagram extension is now active!');
@@ -13,6 +15,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     const javaParser = new JavaCodeParser(context);
     const plantUMLGenerator = new PlantUMLGenerator();
+    webviewProvider = new ClassDiagramWebviewProvider(context);
 
     // Initialize the Java parser with Language Server support
     try {
@@ -22,13 +25,16 @@ export async function activate(context: vscode.ExtensionContext) {
         console.warn('Failed to initialize Language Server support, using fallback parsing:', error);
     }
 
+    // Try to activate Java extension pack members early (also in host debug)
+    await ensureJavaExtensionsActivated();
+
     // Register command to generate class diagram for single file
     const generateDiagramCommand = vscode.commands.registerCommand(
-        'javaClassDiagram.generateDiagram', 
+        'javaClassDiagram.generateDiagram',
         async (uri: vscode.Uri) => {
             try {
                 vscode.window.showInformationMessage('Generate Class Diagram command triggered!');
-                
+
                 if (!uri) {
                     const activeEditor = vscode.window.activeTextEditor;
                     if (!activeEditor) {
@@ -53,9 +59,30 @@ export async function activate(context: vscode.ExtensionContext) {
                 // Generate interactive diagram with related classes
                 const plantUMLCode = plantUMLGenerator.generateInteractiveClassDiagram(mainClass, relatedClasses);
 
+                // --- DEBUG LOGGING START ---
+                console.log("--- Generated PlantUML Code ---");
+                console.log(plantUMLCode);
+                console.log("--- Parsed Class Details ---");
+                const logClassDetails = (cls: any, prefix = "") => {
+                    if (!cls) return;
+                    console.log(`${prefix}Class: ${cls.className}`);
+                    console.log(`${prefix}  Superclass: ${cls.superClass || 'N/A'}`);
+                    if (cls.inheritanceHierarchy && cls.inheritanceHierarchy.length > 0) {
+                        console.log(`${prefix}  Inheritance Hierarchy: ${cls.inheritanceHierarchy.join(' -> ')}`);
+                    }
+                };
+                console.log("Main Class:");
+                logClassDetails(mainClass);
+                if (relatedClasses.length > 0) {
+                    console.log("Related Classes:");
+                    relatedClasses.forEach(cls => logClassDetails(cls, "  "));
+                }
+                console.log("--- END DEBUG LOGGING ---");
+                // --- DEBUG LOGGING END ---
+
                 // Show diagram in new webview panel
                 await showClassDiagram(context, plantUMLCode, path.basename(uri.fsPath, '.java'), [mainClass, ...relatedClasses]);
-                
+
             } catch (error) {
                 vscode.window.showErrorMessage(`Error generating diagram: ${error}`);
                 console.error('Error:', error);
@@ -69,7 +96,7 @@ export async function activate(context: vscode.ExtensionContext) {
         async (uri: vscode.Uri) => {
             try {
                 vscode.window.showInformationMessage('Generate Folder Class Diagram command triggered!');
-                
+
                 if (!uri) {
                     vscode.window.showErrorMessage('No folder selected');
                     return;
@@ -81,9 +108,9 @@ export async function activate(context: vscode.ExtensionContext) {
                     title: "Generating folder class diagram",
                     cancellable: true
                 }, async (progress, token) => {
-                    
+
                     progress.report({ increment: 0, message: "Searching for Java files..." });
-                    
+
                     const javaFiles = await findJavaFiles(uri.fsPath);
                     if (javaFiles.length === 0) {
                         vscode.window.showWarningMessage('No Java files found in the selected folder');
@@ -93,13 +120,13 @@ export async function activate(context: vscode.ExtensionContext) {
                     // Limit the number of files to process to prevent memory issues
                     const maxFiles = 50;
                     let filesToProcess = javaFiles;
-                    
+
                     if (javaFiles.length > maxFiles) {
                         const choice = await vscode.window.showWarningMessage(
                             `Found ${javaFiles.length} Java files. Processing all files may cause performance issues. Would you like to process only the first ${maxFiles} files?`,
                             'Process First 50', 'Process All', 'Cancel'
                         );
-                        
+
                         if (choice === 'Cancel') {
                             return;
                         } else if (choice === 'Process First 50') {
@@ -111,26 +138,26 @@ export async function activate(context: vscode.ExtensionContext) {
 
                     const allClassStructures = [];
                     const errors = [];
-                    
+
                     for (let i = 0; i < filesToProcess.length; i++) {
                         if (token.isCancellationRequested) {
                             vscode.window.showInformationMessage('Class diagram generation cancelled');
                             return;
                         }
-                        
+
                         const javaFile = filesToProcess[i];
                         const fileName = path.basename(javaFile);
-                        
+
                         try {
-                            progress.report({ 
-                                increment: 80 / filesToProcess.length, 
-                                message: `Parsing ${fileName}... (${i + 1}/${filesToProcess.length})` 
+                            progress.report({
+                                increment: 80 / filesToProcess.length,
+                                message: `Parsing ${fileName}... (${i + 1}/${filesToProcess.length})`
                             });
-                            
+
                             const javaCode = fs.readFileSync(javaFile, 'utf8');
                             const classStructure = await javaParser.parseJavaFile(javaCode, javaFile);
                             allClassStructures.push(classStructure);
-                            
+
                         } catch (error) {
                             console.error(`Error parsing ${javaFile}:`, error);
                             errors.push({ file: fileName, error: error instanceof Error ? error.message : String(error) });
@@ -150,25 +177,32 @@ export async function activate(context: vscode.ExtensionContext) {
                     progress.report({ increment: 90, message: "Generating PlantUML diagram..." });
 
                     try {
+                        if (allClassStructures.length === 0) {
+                            vscode.window.showWarningMessage('No classes could be parsed successfully');
+                            return;
+                        }
+
                         const plantUMLCode = plantUMLGenerator.generateMultiClassDiagram(allClassStructures);
-                        
+
                         progress.report({ increment: 100, message: "Opening diagram..." });
-                        
+
                         await showClassDiagram(context, plantUMLCode, path.basename(uri.fsPath) + '_diagram', allClassStructures);
-                        
+
                         // Show summary
                         let message = `Successfully generated diagram for ${allClassStructures.length} classes`;
                         if (errors.length > 0) {
                             message += ` (${errors.length} files had parsing errors)`;
+                            console.log('Parsing errors:', errors);
                         }
                         vscode.window.showInformationMessage(message);
-                        
+
                     } catch (error) {
                         vscode.window.showErrorMessage(`Error generating PlantUML diagram: ${error instanceof Error ? error.message : String(error)}`);
                         console.error('PlantUML generation error:', error);
+                        console.error('Class structures:', allClassStructures);
                     }
                 });
-                
+
             } catch (error) {
                 vscode.window.showErrorMessage(`Error generating folder diagram: ${error}`);
                 console.error('Error:', error);
@@ -188,21 +222,21 @@ export async function activate(context: vscode.ExtensionContext) {
                 }
 
                 vscode.window.showInformationMessage('Testing large project handling...');
-                
+
                 // Test finding Java files in the workspace
                 const javaFiles = await findJavaFiles(workspaceFolder.uri.fsPath);
-                
+
                 const message = `Found ${javaFiles.length} Java files in workspace. ` +
                     `First 5 files: ${javaFiles.slice(0, 5).map(f => path.basename(f)).join(', ')}`;
-                
+
                 vscode.window.showInformationMessage(message);
-                
+
                 // Show detailed info in console
                 console.log('Java files found:');
                 javaFiles.forEach((file, index) => {
                     console.log(`${index + 1}. ${file}`);
                 });
-                
+
             } catch (error) {
                 vscode.window.showErrorMessage(`Error testing large project: ${error instanceof Error ? error.message : String(error)}`);
             }
@@ -232,8 +266,8 @@ export async function activate(context: vscode.ExtensionContext) {
     );
 
     context.subscriptions.push(
-        generateDiagramCommand, 
-        generateFolderDiagramCommand, 
+        generateDiagramCommand,
+        generateFolderDiagramCommand,
         testLargeProjectCommand,
         testSystemParsingCommand,
         testCommand
@@ -241,53 +275,13 @@ export async function activate(context: vscode.ExtensionContext) {
 }
 
 async function showClassDiagram(
-    context: vscode.ExtensionContext, 
-    plantUMLCode: string, 
-    title: string, 
+    context: vscode.ExtensionContext,
+    plantUMLCode: string,
+    title: string,
     classStructures: any[]
 ): Promise<void> {
-    // Close existing panel if it exists
-    if (currentPanel) {
-        currentPanel.dispose();
-    }
-
-    // Create new panel
-    currentPanel = vscode.window.createWebviewPanel(
-        'javaClassDiagram',
-        `Class Diagram - ${title}`,
-        vscode.ViewColumn.One,
-        {
-            enableScripts: true,
-            retainContextWhenHidden: true,
-            localResourceRoots: [
-                vscode.Uri.joinPath(context.extensionUri, 'resources')
-            ]
-        }
-    );
-
-    // Handle panel disposal
-    currentPanel.onDidDispose(() => {
-        currentPanel = undefined;
-    });
-
-    // Handle messages from webview for navigation
-    currentPanel.webview.onDidReceiveMessage(
-        async message => {
-            switch (message.command) {
-                case 'navigateToClass':
-                    await navigateToClass(message.className, message.filePath);
-                    break;
-                case 'navigateToMethod':
-                    await navigateToMethod(message.className, message.methodName, message.filePath);
-                    break;
-                case 'showClassDetails':
-                    await showClassDetails(message.className, classStructures);
-                    break;
-            }
-        }
-    );
-
-    currentPanel.webview.html = getEnhancedWebviewContent(plantUMLCode, title, classStructures);
+    // 使用改进的webview provider来显示类图
+    await webviewProvider.showClassDiagram(plantUMLCode, title);
 }
 
 function getEnhancedWebviewContent(plantUMLCode: string, title: string, classStructures: any[]): string {
@@ -442,7 +436,7 @@ function getEnhancedWebviewContent(plantUMLCode: string, title: string, classStr
         <div class="sidebar-title">Classes (${classSummary.length})</div>
         <div id="class-list">
             ${classSummary.map(cls => `
-                <div class="class-item ${cls.isSystemClass ? 'system-class' : ''}" 
+                <div class="class-item ${cls.isSystemClass ? 'system-class' : ''}"
                      onclick="selectClass('${cls.name}', '${cls.filePath}')">
                     <div class="class-name">${cls.name}</div>
                     <div class="class-type">${cls.type}${cls.package ? ' • ' + cls.package : ''}</div>
@@ -454,7 +448,7 @@ function getEnhancedWebviewContent(plantUMLCode: string, title: string, classStr
             `).join('')}
         </div>
     </div>
-    
+
     <div class="main-content">
         <div class="header">
             <h1 class="title">Java Class Diagram - ${title}</h1>
@@ -465,14 +459,14 @@ function getEnhancedWebviewContent(plantUMLCode: string, title: string, classStr
                 <button class="button" onclick="testSystemParsing()">Test System Parsing</button>
             </div>
         </div>
-        
+
         <div class="diagram-container">
             <div class="loading" id="loading">
                 Generating enhanced class diagram...
             </div>
             <div id="diagram-content"></div>
         </div>
-        
+
         <div class="plantuml-code" id="plantuml-code">
             <h3>PlantUML Code:</h3>
             <pre>${plantUMLCode}</pre>
@@ -484,45 +478,45 @@ function getEnhancedWebviewContent(plantUMLCode: string, title: string, classStr
         const vscode = acquireVsCodeApi();
         const plantUMLCode = \`${plantUMLCode}\`;
         const classStructures = ${JSON.stringify(classSummary)};
-        
+
         function generateDiagram() {
             try {
                 const loading = document.getElementById('loading');
                 const diagramContent = document.getElementById('diagram-content');
-                
+
                 loading.style.display = 'flex';
                 diagramContent.innerHTML = '';
-                
+
                 // Encode PlantUML code
                 const encoded = plantumlEncoder.encode(plantUMLCode);
                 const diagramUrl = \`http://www.plantuml.com/plantuml/svg/\${encoded}\`;
-                
+
                 // Create SVG element
                 const img = document.createElement('img');
                 img.id = 'diagram-svg';
                 img.src = diagramUrl;
                 img.alt = 'Class Diagram';
-                
+
                 img.onload = function() {
                     loading.style.display = 'none';
                     diagramContent.appendChild(img);
-                    
+
                     // Add click handlers for interactive elements
                     addClickHandlers();
                 };
-                
+
                 img.onerror = function() {
                     loading.style.display = 'none';
                     diagramContent.innerHTML = '<div class="error">Failed to generate diagram. Please check your internet connection.</div>';
                 };
-                
+
             } catch (error) {
                 document.getElementById('loading').style.display = 'none';
-                document.getElementById('diagram-content').innerHTML = 
+                document.getElementById('diagram-content').innerHTML =
                     \`<div class="error">Error generating diagram: \${error.message}</div>\`;
             }
         }
-        
+
         function addClickHandlers() {
             const svg = document.getElementById('diagram-svg');
             if (svg) {
@@ -532,7 +526,7 @@ function getEnhancedWebviewContent(plantUMLCode: string, title: string, classStr
                 });
             }
         }
-        
+
         function toggleCode() {
             const codeElement = document.getElementById('plantuml-code');
             if (codeElement.style.display === 'none' || codeElement.style.display === '') {
@@ -541,7 +535,7 @@ function getEnhancedWebviewContent(plantUMLCode: string, title: string, classStr
                 codeElement.style.display = 'none';
             }
         }
-        
+
         function downloadSVG() {
             const svg = document.getElementById('diagram-svg');
             if (svg) {
@@ -551,11 +545,11 @@ function getEnhancedWebviewContent(plantUMLCode: string, title: string, classStr
                 link.click();
             }
         }
-        
+
         function refreshDiagram() {
             generateDiagram();
         }
-        
+
         function selectClass(className, filePath) {
             vscode.postMessage({
                 command: 'navigateToClass',
@@ -563,13 +557,13 @@ function getEnhancedWebviewContent(plantUMLCode: string, title: string, classStr
                 filePath: filePath
             });
         }
-        
+
         function testSystemParsing() {
             vscode.postMessage({
                 command: 'testSystemParsing'
             });
         }
-        
+
         // Generate diagram on load
         generateDiagram();
     </script>
@@ -581,12 +575,12 @@ async function navigateToClass(className: string, filePath: string): Promise<voi
     try {
         const document = await vscode.workspace.openTextDocument(filePath);
         const editor = await vscode.window.showTextDocument(document, vscode.ViewColumn.Two);
-        
+
         // Find class declaration
         const text = document.getText();
         const classRegex = new RegExp(`(class|interface|enum)\\s+${className}\\b`, 'g');
         const match = classRegex.exec(text);
-        
+
         if (match) {
             const position = document.positionAt(match.index);
             editor.selection = new vscode.Selection(position, position);
@@ -601,12 +595,12 @@ async function navigateToMethod(className: string, methodName: string, filePath:
     try {
         const document = await vscode.workspace.openTextDocument(filePath);
         const editor = await vscode.window.showTextDocument(document, vscode.ViewColumn.Two);
-        
+
         // Find method declaration
         const text = document.getText();
         const methodRegex = new RegExp(`\\b${methodName}\\s*\\(`, 'g');
         const match = methodRegex.exec(text);
-        
+
         if (match) {
             const position = document.positionAt(match.index);
             editor.selection = new vscode.Selection(position, position);
@@ -635,34 +629,34 @@ System Class: ${classStructure.isSystemClass ? 'Yes' : 'No'}
 
 async function findJavaFiles(folderPath: string): Promise<string[]> {
     const javaFiles: string[] = [];
-    
+
     // Directories to skip for performance and relevance
     const skipDirectories = new Set([
-        'node_modules', '.git', '.svn', '.hg', 'build', 'dist', 'out', 'bin', 
+        'node_modules', '.git', '.svn', '.hg', 'build', 'dist', 'out', 'bin',
         'target', '.idea', '.vscode', 'temp', 'tmp', '.gradle', '.maven',
         'test-output', 'coverage', 'logs', 'cache'
     ]);
-    
+
     function searchDirectory(dir: string, depth: number = 0) {
         // Limit recursion depth to prevent infinite loops and improve performance
         if (depth > 10) {
             return;
         }
-        
+
         try {
             const files = fs.readdirSync(dir);
-            
+
             for (const file of files) {
                 // Skip hidden files and directories
                 if (file.startsWith('.') && !file.endsWith('.java')) {
                     continue;
                 }
-                
+
                 const filePath = path.join(dir, file);
-                
+
                 try {
                     const stat = fs.statSync(filePath);
-                    
+
                     if (stat.isDirectory()) {
                         // Skip excluded directories
                         if (skipDirectories.has(file.toLowerCase())) {
@@ -682,11 +676,42 @@ async function findJavaFiles(folderPath: string): Promise<string[]> {
             console.warn(`Cannot read directory ${dir}: ${error}`);
         }
     }
-    
+
     searchDirectory(folderPath);
     return javaFiles;
 }
 
+
+async function ensureJavaExtensionsActivated() {
+    const ids = [
+        'redhat.java',                    // Language Support for Java(TM) by Red Hat
+        'vscjava.vscode-java-debug',      // Debugger for Java
+        'vscjava.vscode-java-test',       // Test Runner for Java
+        'vscjava.vscode-maven',           // Maven for Java
+        'vscjava.vscode-gradle',          // Gradle for Java
+        'vscjava.vscode-java-dependency', // Project Manager for Java
+        'vscjava.vscode-java-pack'        // Extension Pack for Java (meta)
+    ];
+
+    for (const id of ids) {
+        try {
+            const ext = vscode.extensions.getExtension(id);
+            if (ext) {
+                if (!ext.isActive) {
+                    console.log(`[Java Pack] Activating ${id}...`);
+                    await ext.activate();
+                } else {
+                    console.log(`[Java Pack] Already active: ${id}`);
+                }
+            } else {
+                console.warn(`[Java Pack] Not installed: ${id}`);
+            }
+        } catch (e) {
+            console.warn(`[Java Pack] Failed to activate ${id}:`, e);
+        }
+    }
+}
+
 export function deactivate() {
     console.log('Java Class Diagram extension is now deactivated!');
-} 
+}

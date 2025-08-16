@@ -55,6 +55,8 @@ async function activate(context) {
     catch (error) {
         console.warn('Failed to initialize Language Server support, using fallback parsing:', error);
     }
+    // Try to activate Java extension pack members early (also in host debug)
+    await ensureJavaExtensionsActivated();
     // Register command to generate class diagram for single file
     const generateDiagramCommand = vscode.commands.registerCommand('javaClassDiagram.generateDiagram', async (uri) => {
         try {
@@ -77,6 +79,27 @@ async function activate(context) {
             const { mainClass, relatedClasses } = await javaParser.parseJavaFileWithRelatedClasses(javaCode, uri.fsPath);
             // Generate interactive diagram with related classes
             const plantUMLCode = plantUMLGenerator.generateInteractiveClassDiagram(mainClass, relatedClasses);
+            // --- DEBUG LOGGING START ---
+            console.log("--- Generated PlantUML Code ---");
+            console.log(plantUMLCode);
+            console.log("--- Parsed Class Details ---");
+            const logClassDetails = (cls, prefix = "") => {
+                if (!cls)
+                    return;
+                console.log(`${prefix}Class: ${cls.className}`);
+                console.log(`${prefix}  Superclass: ${cls.superClass || 'N/A'}`);
+                if (cls.inheritanceHierarchy && cls.inheritanceHierarchy.length > 0) {
+                    console.log(`${prefix}  Inheritance Hierarchy: ${cls.inheritanceHierarchy.join(' -> ')}`);
+                }
+            };
+            console.log("Main Class:");
+            logClassDetails(mainClass);
+            if (relatedClasses.length > 0) {
+                console.log("Related Classes:");
+                relatedClasses.forEach(cls => logClassDetails(cls, "  "));
+            }
+            console.log("--- END DEBUG LOGGING ---");
+            // --- DEBUG LOGGING END ---
             // Show diagram in new webview panel
             await showClassDiagram(context, plantUMLCode, path.basename(uri.fsPath, '.java'), [mainClass, ...relatedClasses]);
         }
@@ -152,6 +175,10 @@ async function activate(context) {
                 }
                 progress.report({ increment: 90, message: "Generating PlantUML diagram..." });
                 try {
+                    if (allClassStructures.length === 0) {
+                        vscode.window.showWarningMessage('No classes could be parsed successfully');
+                        return;
+                    }
                     const plantUMLCode = plantUMLGenerator.generateMultiClassDiagram(allClassStructures);
                     progress.report({ increment: 100, message: "Opening diagram..." });
                     await showClassDiagram(context, plantUMLCode, path.basename(uri.fsPath) + '_diagram', allClassStructures);
@@ -159,12 +186,14 @@ async function activate(context) {
                     let message = `Successfully generated diagram for ${allClassStructures.length} classes`;
                     if (errors.length > 0) {
                         message += ` (${errors.length} files had parsing errors)`;
+                        console.log('Parsing errors:', errors);
                     }
                     vscode.window.showInformationMessage(message);
                 }
                 catch (error) {
                     vscode.window.showErrorMessage(`Error generating PlantUML diagram: ${error instanceof Error ? error.message : String(error)}`);
                     console.error('PlantUML generation error:', error);
+                    console.error('Class structures:', allClassStructures);
                 }
             });
         }
@@ -398,7 +427,7 @@ function getEnhancedWebviewContent(plantUMLCode, title, classStructures) {
         <div class="sidebar-title">Classes (${classSummary.length})</div>
         <div id="class-list">
             ${classSummary.map(cls => `
-                <div class="class-item ${cls.isSystemClass ? 'system-class' : ''}" 
+                <div class="class-item ${cls.isSystemClass ? 'system-class' : ''}"
                      onclick="selectClass('${cls.name}', '${cls.filePath}')">
                     <div class="class-name">${cls.name}</div>
                     <div class="class-type">${cls.type}${cls.package ? ' • ' + cls.package : ''}</div>
@@ -410,7 +439,7 @@ function getEnhancedWebviewContent(plantUMLCode, title, classStructures) {
             `).join('')}
         </div>
     </div>
-    
+
     <div class="main-content">
         <div class="header">
             <h1 class="title">Java Class Diagram - ${title}</h1>
@@ -421,14 +450,14 @@ function getEnhancedWebviewContent(plantUMLCode, title, classStructures) {
                 <button class="button" onclick="testSystemParsing()">Test System Parsing</button>
             </div>
         </div>
-        
+
         <div class="diagram-container">
             <div class="loading" id="loading">
                 Generating enhanced class diagram...
             </div>
             <div id="diagram-content"></div>
         </div>
-        
+
         <div class="plantuml-code" id="plantuml-code">
             <h3>PlantUML Code:</h3>
             <pre>${plantUMLCode}</pre>
@@ -440,45 +469,45 @@ function getEnhancedWebviewContent(plantUMLCode, title, classStructures) {
         const vscode = acquireVsCodeApi();
         const plantUMLCode = \`${plantUMLCode}\`;
         const classStructures = ${JSON.stringify(classSummary)};
-        
+
         function generateDiagram() {
             try {
                 const loading = document.getElementById('loading');
                 const diagramContent = document.getElementById('diagram-content');
-                
+
                 loading.style.display = 'flex';
                 diagramContent.innerHTML = '';
-                
+
                 // Encode PlantUML code
                 const encoded = plantumlEncoder.encode(plantUMLCode);
                 const diagramUrl = \`http://www.plantuml.com/plantuml/svg/\${encoded}\`;
-                
+
                 // Create SVG element
                 const img = document.createElement('img');
                 img.id = 'diagram-svg';
                 img.src = diagramUrl;
                 img.alt = 'Class Diagram';
-                
+
                 img.onload = function() {
                     loading.style.display = 'none';
                     diagramContent.appendChild(img);
-                    
+
                     // Add click handlers for interactive elements
                     addClickHandlers();
                 };
-                
+
                 img.onerror = function() {
                     loading.style.display = 'none';
                     diagramContent.innerHTML = '<div class="error">Failed to generate diagram. Please check your internet connection.</div>';
                 };
-                
+
             } catch (error) {
                 document.getElementById('loading').style.display = 'none';
-                document.getElementById('diagram-content').innerHTML = 
+                document.getElementById('diagram-content').innerHTML =
                     \`<div class="error">Error generating diagram: \${error.message}</div>\`;
             }
         }
-        
+
         function addClickHandlers() {
             const svg = document.getElementById('diagram-svg');
             if (svg) {
@@ -488,7 +517,7 @@ function getEnhancedWebviewContent(plantUMLCode, title, classStructures) {
                 });
             }
         }
-        
+
         function toggleCode() {
             const codeElement = document.getElementById('plantuml-code');
             if (codeElement.style.display === 'none' || codeElement.style.display === '') {
@@ -497,7 +526,7 @@ function getEnhancedWebviewContent(plantUMLCode, title, classStructures) {
                 codeElement.style.display = 'none';
             }
         }
-        
+
         function downloadSVG() {
             const svg = document.getElementById('diagram-svg');
             if (svg) {
@@ -507,11 +536,11 @@ function getEnhancedWebviewContent(plantUMLCode, title, classStructures) {
                 link.click();
             }
         }
-        
+
         function refreshDiagram() {
             generateDiagram();
         }
-        
+
         function selectClass(className, filePath) {
             vscode.postMessage({
                 command: 'navigateToClass',
@@ -519,13 +548,13 @@ function getEnhancedWebviewContent(plantUMLCode, title, classStructures) {
                 filePath: filePath
             });
         }
-        
+
         function testSystemParsing() {
             vscode.postMessage({
                 command: 'testSystemParsing'
             });
         }
-        
+
         // Generate diagram on load
         generateDiagram();
     </script>
@@ -630,6 +659,37 @@ async function findJavaFiles(folderPath) {
     }
     searchDirectory(folderPath);
     return javaFiles;
+}
+async function ensureJavaExtensionsActivated() {
+    const ids = [
+        'redhat.java', // Language Support for Java(TM) by Red Hat
+        'vscjava.vscode-java-debug', // Debugger for Java
+        'vscjava.vscode-java-test', // Test Runner for Java
+        'vscjava.vscode-maven', // Maven for Java
+        'vscjava.vscode-gradle', // Gradle for Java
+        'vscjava.vscode-java-dependency', // Project Manager for Java
+        'vscjava.vscode-java-pack' // Extension Pack for Java (meta)
+    ];
+    for (const id of ids) {
+        try {
+            const ext = vscode.extensions.getExtension(id);
+            if (ext) {
+                if (!ext.isActive) {
+                    console.log(`[Java Pack] Activating ${id}...`);
+                    await ext.activate();
+                }
+                else {
+                    console.log(`[Java Pack] Already active: ${id}`);
+                }
+            }
+            else {
+                console.warn(`[Java Pack] Not installed: ${id}`);
+            }
+        }
+        catch (e) {
+            console.warn(`[Java Pack] Failed to activate ${id}:`, e);
+        }
+    }
 }
 function deactivate() {
     console.log('Java Class Diagram extension is now deactivated!');

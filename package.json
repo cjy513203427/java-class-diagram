@@ -11,7 +11,9 @@
     "Visualization"
   ],
   "activationEvents": [
-    "onLanguage:java"
+    "onStartupFinished",
+    "onLanguage:java",
+    "*"
   ],
   "main": "./out/extension.js",
   "contributes": {
