@@ -1,0 +1,106 @@
+@startuml
+!theme plain
+
+' Enhanced styling configuration
+skinparam classAttributeIconSize 0
+skinparam classFontSize 12
+skinparam packageFontSize 14
+skinparam classFontName Arial
+skinparam packageFontName Arial
+
+' Color scheme
+skinparam backgroundColor #FFFFFF
+skinparam class {
+    BackgroundColor #E8F4FD
+    BorderColor #1F77B4
+    ArrowColor #1F77B4
+    FontColor #000000
+    HeaderBackgroundColor #1F77B4
+    HeaderFontColor #FFFFFF
+}
+
+skinparam interface {
+    BackgroundColor #FFF2CC
+    BorderColor #D6B656
+    ArrowColor #D6B656
+    FontColor #000000
+    HeaderBackgroundColor #D6B656
+    HeaderFontColor #000000
+}
+
+skinparam enum {
+    BackgroundColor #E1D5E7
+    BorderColor #9673A6
+    ArrowColor #9673A6
+    FontColor #000000
+    HeaderBackgroundColor #9673A6
+    HeaderFontColor #FFFFFF
+}
+
+skinparam abstract {
+    BackgroundColor #DAE8FC
+    BorderColor #6C8EBF
+    ArrowColor #6C8EBF
+    FontColor #000000
+    HeaderBackgroundColor #6C8EBF
+    HeaderFontColor #FFFFFF
+}
+
+' Relationship styles
+skinparam arrow {
+    Thickness 2
+    Color #1F77B4
+}
+
+' Package styling
+skinparam package {
+    BackgroundColor #F8F8F8
+    BorderColor #CCCCCC
+    FontColor #000000
+    Style rectangle
+}
+
+' Legend configuration
+skinparam legend {
+    BackgroundColor #F0F0F0
+    BorderColor #CCCCCC
+    FontSize 10
+}
+
+' Note styling
+skinparam note {
+    BackgroundColor #FFFFCC
+    BorderColor #CCCC00
+    FontSize 10
+}
+
+' Visibility symbols legend
+legend right
+|= Symbol |= Visibility |
+| + | public |
+| - | private |
+| # | protected |
+| ~ | package |
+| {static} | static |
+| {abstract} | abstract |
+| {final} | final |
+endlegend
+
+' Direction and layout
+!define DIRECTION top to bottom direction
+left to right direction
+
+' Spacing configuration
+skinparam minClassWidth 100
+skinparam maxMessageSize 60
+skinparam wrapWidth 200
+
+' Class relationship symbols
+' <|-- : inheritance (extends)
+' <|.. : realization (implements)
+' *-- : composition
+' o-- : aggregation
+' --> : association
+' ..> : dependency
+
+@enduml 

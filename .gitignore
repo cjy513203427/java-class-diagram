@@ -1,0 +1,44 @@
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+package-lock.json
+
+# Logs
+logs/
+*.log
+*.log.*
+
+# OS/Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Build outputs
+out/
+dist/
+build/
+coverage/
+.temp/
+.tmp/
+
+# TypeScript
+*.tsbuildinfo
+
+# VS Code extension packaging
+*.vsix
+
+# Cache
+.cache/
+.eslintcache
+
+# Test outputs
+junit.xml
+coverage-final.json
+
+# Misc
+.env
+.env.*
